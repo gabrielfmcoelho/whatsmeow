@@ -20,14 +20,14 @@ import (
 	"go.mau.fi/libsignal/protocol"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"go.mau.fi/whatsmeow/proto/waCommon"
-	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
-	"go.mau.fi/whatsmeow/proto/waMsgApplication"
-	"go.mau.fi/whatsmeow/proto/waMsgTransport"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	waBinary "github.com/gabrielfmcoelho/whatsmeow/binary"
+	waProto "github.com/gabrielfmcoelho/whatsmeow/binary/proto"
+	"github.com/gabrielfmcoelho/whatsmeow/proto/waCommon"
+	"github.com/gabrielfmcoelho/whatsmeow/proto/waConsumerApplication"
+	"github.com/gabrielfmcoelho/whatsmeow/proto/waMsgApplication"
+	"github.com/gabrielfmcoelho/whatsmeow/proto/waMsgTransport"
+	"github.com/gabrielfmcoelho/whatsmeow/types"
+	"github.com/gabrielfmcoelho/whatsmeow/types/events"
 )
 
 // Number of sent messages to cache in memory for handling retry receipts.
@@ -344,7 +344,7 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	_, err := cli.SendMessage(
 		ctx,
 		cli.getOwnID().ToNonAD(),
-		cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
+		cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID), 0, 0,
 		SendRequestExtra{Peer: true},
 	)
 	if err != nil {

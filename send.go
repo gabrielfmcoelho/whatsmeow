@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,11 +29,11 @@ import (
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	waBinary "github.com/gabrielfmcoelho/whatsmeow/binary"
+	waProto "github.com/gabrielfmcoelho/whatsmeow/binary/proto"
+	"github.com/gabrielfmcoelho/whatsmeow/proto/waE2E"
+	"github.com/gabrielfmcoelho/whatsmeow/types"
+	"github.com/gabrielfmcoelho/whatsmeow/types/events"
 )
 
 // GenerateMessageID generates a random string that can be used as a message ID on WhatsApp.
@@ -166,7 +167,24 @@ type SendRequestExtra struct {
 // in binary/proto/def.proto may be useful to find out all the allowed fields. Printing the RawMessage
 // field in incoming message events to figure out what it contains is also a good way to learn how to
 // send the same kind of message.
-func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E.Message, extra ...SendRequestExtra) (resp SendResponse, err error) {
+
+func (cli *Client) simulateTyping(to types.JID, baseTimeDelay time.Duration, marginDelay time.Duration) {
+	// baseTimeDelay is the base time delay for typing
+	// marginDelay is a percentage of the baseTimeDelay that will be added to the baseTimeDelay, from 0 to 100
+	// randomFactor is a random float from 0.01 to 1.0 that will be multiplied by the baseTimeDelay
+	// to simulate typing in milliseconds
+	randomFactor := rand.Float64()
+	delay := baseTimeDelay + time.Duration(float64(baseTimeDelay)*randomFactor) + marginDelay
+	//fmt.Println("Typing delay in seconds: ", delay.Seconds())
+	cli.SendChatPresence(to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	time.Sleep(delay)
+}
+
+func (cli *Client) stopTyping(to types.JID) {
+	cli.SendChatPresence(to, types.ChatPresencePaused, types.ChatPresenceMediaText)
+}
+
+func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E.Message, baseTypingDelay time.Duration, marginTypingDelay time.Duration, extra ...SendRequestExtra) (resp SendResponse, err error) {
 	var req SendRequestExtra
 	if len(extra) > 1 {
 		err = errors.New("only one extra parameter may be provided to SendMessage")
@@ -251,7 +269,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				},
 			}
 
+			cli.simulateTyping(to, baseTypingDelay, marginTypingDelay)
 			messagePlaintext, _, marshalErr := marshalMessage(req.InlineBotJID, botMessage)
+			cli.stopTyping(to)
+
 			if marshalErr != nil {
 				err = marshalErr
 				return
@@ -290,15 +311,15 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	var data []byte
 	switch to.Server {
 	case types.GroupServer, types.BroadcastServer:
-		phash, data, err = cli.sendGroup(ctx, to, ownID, req.ID, message, &resp.DebugTimings, botNode)
+		phash, data, err = cli.sendGroup(ctx, to, ownID, req.ID, message, &resp.DebugTimings, botNode, baseTypingDelay, marginTypingDelay)
 	case types.DefaultUserServer:
 		if req.Peer {
-			data, err = cli.sendPeerMessage(to, req.ID, message, &resp.DebugTimings)
+			data, err = cli.sendPeerMessage(to, req.ID, message, &resp.DebugTimings, baseTypingDelay, marginTypingDelay)
 		} else {
-			data, err = cli.sendDM(ctx, to, ownID, req.ID, message, &resp.DebugTimings, botNode)
+			data, err = cli.sendDM(ctx, to, ownID, req.ID, message, &resp.DebugTimings, botNode, baseTypingDelay, marginTypingDelay)
 		}
 	case types.NewsletterServer:
-		data, err = cli.sendNewsletter(to, req.ID, message, req.MediaHandle, &resp.DebugTimings)
+		data, err = cli.sendNewsletter(to, req.ID, message, req.MediaHandle, &resp.DebugTimings, baseTypingDelay, marginTypingDelay)
 	default:
 		err = fmt.Errorf("%w %s", ErrUnknownServer, to.Server)
 	}
@@ -358,7 +379,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 //
 // Deprecated: This method is deprecated in favor of BuildRevoke
 func (cli *Client) RevokeMessage(chat types.JID, id types.MessageID) (SendResponse, error) {
-	return cli.SendMessage(context.TODO(), chat, cli.BuildRevoke(chat, types.EmptyJID, id))
+	return cli.SendMessage(context.TODO(), chat, cli.BuildRevoke(chat, types.EmptyJID, id), 0, 0)
 }
 
 // BuildMessageKey builds a MessageKey object, which is used to refer to previous messages
@@ -525,7 +546,7 @@ func (cli *Client) SetDisappearingTimer(chat types.JID, timer time.Duration) (er
 				Type:                waProto.ProtocolMessage_EPHEMERAL_SETTING.Enum(),
 				EphemeralExpiration: proto.Uint32(uint32(timer.Seconds())),
 			},
-		})
+		}, 0, 0)
 	case types.GroupServer:
 		if timer == 0 {
 			_, err = cli.sendGroupIQ(context.TODO(), iqSet, chat, waBinary.Node{Tag: "not_ephemeral"})
@@ -557,7 +578,7 @@ func participantListHashV2(participants []types.JID) string {
 	return fmt.Sprintf("2:%s", base64.RawStdEncoding.EncodeToString(hash[:6]))
 }
 
-func (cli *Client) sendNewsletter(to types.JID, id types.MessageID, message *waProto.Message, mediaID string, timings *MessageDebugTimings) ([]byte, error) {
+func (cli *Client) sendNewsletter(to types.JID, id types.MessageID, message *waProto.Message, mediaID string, timings *MessageDebugTimings, baseTypingDelay time.Duration, marginTypingDelay time.Duration) ([]byte, error) {
 	attrs := waBinary.Attrs{
 		"to":   to,
 		"id":   id,
@@ -574,7 +595,9 @@ func (cli *Client) sendNewsletter(to types.JID, id types.MessageID, message *waP
 		message = nil
 	}
 	start := time.Now()
+	cli.simulateTyping(to, baseTypingDelay, marginTypingDelay)
 	plaintext, _, err := marshalMessage(to, message)
+	cli.stopTyping(to)
 	timings.Marshal = time.Since(start)
 	if err != nil {
 		return nil, err
@@ -601,7 +624,7 @@ func (cli *Client) sendNewsletter(to types.JID, id types.MessageID, message *waP
 	return data, nil
 }
 
-func (cli *Client) sendGroup(ctx context.Context, to, ownID types.JID, id types.MessageID, message *waProto.Message, timings *MessageDebugTimings, botNode *waBinary.Node) (string, []byte, error) {
+func (cli *Client) sendGroup(ctx context.Context, to, ownID types.JID, id types.MessageID, message *waProto.Message, timings *MessageDebugTimings, botNode *waBinary.Node, baseTypingDelay time.Duration, marginTypingDelay time.Duration) (string, []byte, error) {
 	var participants []types.JID
 	var err error
 	start := time.Now()
@@ -619,7 +642,9 @@ func (cli *Client) sendGroup(ctx context.Context, to, ownID types.JID, id types.
 	}
 	timings.GetParticipants = time.Since(start)
 	start = time.Now()
+	cli.simulateTyping(to, baseTypingDelay, marginTypingDelay)
 	plaintext, _, err := marshalMessage(to, message)
+	cli.stopTyping(to)
 	timings.Marshal = time.Since(start)
 	if err != nil {
 		return "", nil, err
@@ -677,8 +702,8 @@ func (cli *Client) sendGroup(ctx context.Context, to, ownID types.JID, id types.
 	return phash, data, nil
 }
 
-func (cli *Client) sendPeerMessage(to types.JID, id types.MessageID, message *waE2E.Message, timings *MessageDebugTimings) ([]byte, error) {
-	node, err := cli.preparePeerMessageNode(to, id, message, timings)
+func (cli *Client) sendPeerMessage(to types.JID, id types.MessageID, message *waE2E.Message, timings *MessageDebugTimings, baseTypingDelay time.Duration, marginTypingDelay time.Duration) ([]byte, error) {
+	node, err := cli.preparePeerMessageNode(to, id, message, timings, baseTypingDelay, marginTypingDelay)
 	if err != nil {
 		return nil, err
 	}
@@ -691,9 +716,11 @@ func (cli *Client) sendPeerMessage(to types.JID, id types.MessageID, message *wa
 	return data, nil
 }
 
-func (cli *Client) sendDM(ctx context.Context, to, ownID types.JID, id types.MessageID, message *waE2E.Message, timings *MessageDebugTimings, botNode *waBinary.Node) ([]byte, error) {
+func (cli *Client) sendDM(ctx context.Context, to, ownID types.JID, id types.MessageID, message *waE2E.Message, timings *MessageDebugTimings, botNode *waBinary.Node, baseTypingDelay time.Duration, marginTypingDelay time.Duration) ([]byte, error) {
 	start := time.Now()
+	cli.simulateTyping(to, baseTypingDelay, marginTypingDelay)
 	messagePlaintext, deviceSentMessagePlaintext, err := marshalMessage(to, message)
+	cli.stopTyping(to)
 	timings.Marshal = time.Since(start)
 	if err != nil {
 		return nil, err
@@ -864,7 +891,7 @@ func getEditAttribute(msg *waProto.Message) types.EditAttribute {
 	return types.EditAttributeEmpty
 }
 
-func (cli *Client) preparePeerMessageNode(to types.JID, id types.MessageID, message *waProto.Message, timings *MessageDebugTimings) (*waBinary.Node, error) {
+func (cli *Client) preparePeerMessageNode(to types.JID, id types.MessageID, message *waProto.Message, timings *MessageDebugTimings, baseTypingDelay time.Duration, marginTypingDelay time.Duration) (*waBinary.Node, error) {
 	attrs := waBinary.Attrs{
 		"id":       id,
 		"type":     "text",
@@ -875,7 +902,9 @@ func (cli *Client) preparePeerMessageNode(to types.JID, id types.MessageID, mess
 		attrs["push_priority"] = "high"
 	}
 	start := time.Now()
+	cli.simulateTyping(to, baseTypingDelay, marginTypingDelay)
 	plaintext, err := proto.Marshal(message)
+	cli.stopTyping(to)
 	timings.Marshal = time.Since(start)
 	if err != nil {
 		err = fmt.Errorf("failed to marshal message: %w", err)
@@ -977,6 +1006,7 @@ func marshalMessage(to types.JID, message *waProto.Message) (plaintext, dsmPlain
 	if message == nil && to.Server == types.NewsletterServer {
 		return
 	}
+
 	plaintext, err = proto.Marshal(message)
 	if err != nil {
 		err = fmt.Errorf("failed to marshal message: %w", err)

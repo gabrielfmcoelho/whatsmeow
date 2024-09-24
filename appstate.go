@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"time"
 
-	"go.mau.fi/whatsmeow/appstate"
-	waBinary "go.mau.fi/whatsmeow/binary"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	"github.com/gabrielfmcoelho/whatsmeow/appstate"
+	waBinary "github.com/gabrielfmcoelho/whatsmeow/binary"
+	waProto "github.com/gabrielfmcoelho/whatsmeow/binary/proto"
+	"github.com/gabrielfmcoelho/whatsmeow/store"
+	"github.com/gabrielfmcoelho/whatsmeow/types"
+	"github.com/gabrielfmcoelho/whatsmeow/types/events"
 )
 
 // FetchAppState fetches updates to the given type of app state. If fullSync is true, the current
@@ -334,7 +334,7 @@ func (cli *Client) requestAppStateKeys(ctx context.Context, rawKeyIDs [][]byte) 
 		return
 	}
 	cli.Log.Infof("Sending key request for app state keys %+v", debugKeyIDs)
-	_, err := cli.SendMessage(ctx, ownID, msg, SendRequestExtra{Peer: true})
+	_, err := cli.SendMessage(ctx, ownID, msg, 0, 0, SendRequestExtra{Peer: true})
 	if err != nil {
 		cli.Log.Warnf("Failed to send app state key request: %v", err)
 	}
